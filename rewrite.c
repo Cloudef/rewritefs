@@ -8,6 +8,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <errno.h>
+#include <sys/stat.h>
 
 #include <fuse.h>
 #include <fuse_opt.h>
@@ -45,6 +46,7 @@ struct config {
     char *mount_point;
     struct rewrite_context *contexts;
     int verbose;
+    int fallback;
 };
 
 enum type {
@@ -306,6 +308,8 @@ static struct fuse_opt options[] = {
     REWRITE_OPT("config=%s",       config_file, 0),
     REWRITE_OPT("-v %i",           verbose, 0),
     REWRITE_OPT("verbose=%i",      verbose, 0),
+    REWRITE_OPT("--fallback",      fallback, 1),
+    REWRITE_OPT("fallback",        fallback, 1),
 
     FUSE_OPT_KEY("-V",             KEY_VERSION),
     FUSE_OPT_KEY("--version",      KEY_VERSION),
@@ -342,6 +346,7 @@ static int options_proc(void *data, const char *arg, int key, struct fuse_args *
                 "    -c CONFIG        path to configuration file\n"
                 "    -r PATH          path to source filesystem\n"
                 "    -v LEVEL         verbose level [to be used with -f or -d]\n"
+                "    --fallback       fallback to original path if rewritten file does not exist\n"
                 "\n",
                 outargs->argv[0]);
         fuse_opt_add_arg(outargs, "-ho");
@@ -526,7 +531,7 @@ char *apply_rule(const char *path, struct rewrite_rule *rule) {
     return rewritten;
 }
 
-char *rewrite(const char *path) {
+static char *rewrite_internal(const char *path) {
     struct rewrite_context *ctx;
     struct rewrite_rule *rule;
     char *caller = NULL;
@@ -569,4 +574,18 @@ char *rewrite(const char *path) {
     
     free(caller);
     return apply_rule(path, NULL);
+}
+
+char *rewrite(const char *path) {
+    char *new_path = rewrite_internal(path);
+    if (new_path == NULL)
+        return NULL;
+
+    struct stat st;
+    if (config.fallback && (stat(new_path, &st) != 0 || S_ISDIR(st.st_mode))) {
+        free(new_path);
+        new_path = strcat(strcpy(malloc(strlen(config.orig_fs)+strlen(path)+1), config.orig_fs), path);
+    }
+
+    return new_path;
 }
